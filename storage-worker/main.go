@@ -27,8 +27,9 @@ type TelemetryRecord struct {
 const (
 	KafkaBroker     = "localhost:9092"
 	SourceTopic     = "raw_positions"
-	ConsumerGroupID = "fleet-storage-group" // Different group name lets it read in parallel!
-	DSN             = "host=localhost port=5432 user=fleet_admin password=fleet_password dbname=fleet_telemetry sslmode=disable"
+	ConsumerGroupID = "fleet-storage-group"
+	// Changed port to 5433 to hit the Docker container perfectly 
+	DSN             = "host=localhost port=5433 user=fleet_admin password=fleet_password dbname=fleet_telemetry sslmode=disable"
 )
 
 func main() {

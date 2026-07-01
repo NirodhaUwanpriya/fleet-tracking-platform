@@ -26,7 +26,7 @@ services:
     image: postgres:15-alpine
     container_name: fleet_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_USER: fleet_admin
       POSTGRES_PASSWORD: fleet_password
