@@ -1,10 +1,3 @@
-Got it. My apologies—I blindly copied the E-commerce example formatting you pasted instead of adapting the tags and image path strictly for *our* Fleet Tracking stack.
-
-Here is the exact, customized Markdown code for your project. I have updated the image source to point to `./assets/fleet-tracking-platform.png` (which perfectly matches your local folder structure) and swapped the badges out for our exact tech stack (Go, Python, Docker, Kafka, gRPC, PostgreSQL, and Leaflet).
-
-Copy and paste this directly into your `README.md`:
-
-```markdown
 # High-Throughput Real-Time Fleet Tracking Cluster
 
 <p align="left">
