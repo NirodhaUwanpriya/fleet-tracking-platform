@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -23,7 +26,6 @@ type TelemetryRecord struct {
 	Timestamp string  `json:"timestamp"`
 }
 
-// VehicleState preserves historical metrics inside our processor memory loop
 type VehicleState struct {
 	LastLat       float64
 	LastLng       float64
@@ -31,42 +33,83 @@ type VehicleState struct {
 	LastSpeed     float64
 }
 
+// WSMessage format standardizes our dashboard protocol frames
+type WSMessage struct {
+	Type    string      `json:"type"` // "telemetry" or "alert"
+	Payload interface{} `json:"payload"`
+}
+
 const (
 	KafkaBroker     = "localhost:9092"
 	SourceTopic     = "raw_positions"
-	ConsumerGroupID = "fleet-cep-group"
+	ConsumerGroupID = "fleet-cep-dashboard-group"
 	
-	// Analytics Thresholds
-	HardBrakingThreshold = -8.0  // mph reduction per second
-	IdleTimeoutDuration  = 5.0   // Seconds before flagging a vehicle as stationary
+	HardBrakingThreshold = -8.0
+	IdleTimeoutDuration  = 5.0
 )
 
-// Degrees to Radians helper utility
-// Degrees to Radians helper utility
-func rad(deg float64) float64 {
-	return deg * math.Pi / 180
-}
+// Thread-safe client connection registry for UI streaming sessions
+var (
+	clients   = make(map[*websocket.Conn]bool)
+	clientsMu sync.Mutex
+	upgrader  = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true }, // Cross-Origin configuration rule
+	}
+)
 
-// Haversine calculates the great-circle distance between two points in miles
+func rad(deg float64) float64 { return deg * math.Pi / 180 }
+
 func calculateDistance(lat1, lng1, lat2, lng2 float64) float64 {
 	const EarthRadiusMiles = 3956.0
-	dLat := rad(lat2 - lat1)
-	dLng := rad(lng2 - lng1)
-	
+	dLat, dLng := rad(lat2-lat1), rad(lng2-lng1)
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(rad(lat1))*math.Cos(rad(lat2))*
-			math.Sin(dLng/2)*math.Sin(dLng/2)
-	
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return EarthRadiusMiles * c
+		math.Cos(rad(lat1))*math.Cos(rad(lat2))*math.Sin(dLng/2)*math.Sin(dLng/2)
+	return EarthRadiusMiles * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+}
+
+// broadcast message out to all open command center UI dashboard clients
+func broadcast(msg WSMessage) {
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	for client := range clients {
+		err := client.WriteJSON(msg)
+		if err != nil {
+			client.Close()
+			delete(clients, client)
+		}
+	}
+}
+
+func handleWebSocketStream(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Websocket upgrading procedure failed: %v", err)
+		return
+	}
+	clientsMu.Lock()
+	clients[conn] = true
+	clientsMu.Unlock()
 }
 
 func main() {
-	fmt.Println("🧠 Initializing Stateful Complex Event Processing (CEP) Engine...")
+	fmt.Println("🧠 Launching Operational Analytics & Dashboard Web Engine...")
 
-	// In-memory state storage map mapping vehicle_id -> historic metrics state
 	stateStore := make(map[string]VehicleState)
 
+	// 1. Launch HTTP file serving endpoint hooks
+	http.HandleFunc("/stream", handleWebSocketStream)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "index.html")
+	})
+
+	go func() {
+		fmt.Println("🌐 Dashboard UI server actively listening on http://localhost:8080")
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			log.Fatalf("UI Server failure: %v", err)
+		}
+	}()
+
+	// 2. Setup Kafka stream integration pipelines
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  []string{KafkaBroker},
 		Topic:    SourceTopic,
@@ -83,12 +126,9 @@ func main() {
 
 	go func() {
 		<-shutdownChan
-		fmt.Println("\nStopping CEP engine safely...")
+		fmt.Println("\nStopping dashboard processor engine...")
 		cancel()
 	}()
-
-	fmt.Println("📥 Streaming and analyzing state trends live...")
-	fmt.Println("----------------------------------------------------------------")
 
 	for {
 		msg, err := reader.ReadMessage(ctx)
@@ -96,7 +136,6 @@ func main() {
 			if ctx.Err() != nil {
 				break
 			}
-			log.Printf("Broker read error: %v", err)
 			continue
 		}
 
@@ -105,44 +144,38 @@ func main() {
 			continue
 		}
 
+		// Send base tracking updates straight to map visualizations
+		broadcast(WSMessage{Type: "telemetry", Payload: record})
+
 		currentLocationTime, err := time.Parse(time.RFC3339, record.Timestamp)
 		if err != nil {
-			// Fallback if timestamp format varies slightly
 			currentLocationTime = time.Now()
 		}
 
-		// Pull existing history tracking vector for this vehicle
 		prevState, exists := stateStore[record.VehicleID]
-		
 		if exists {
-			// 1. Calculate Time Delta
 			timeDeltaSeconds := currentLocationTime.Sub(prevState.LastTimestamp).Seconds()
-			
 			if timeDeltaSeconds > 0 {
-				// 2. Spatial Analytics: Distance Traveled
-				distanceMiles := calculateDistance(prevState.LastLat, prevState.LastLng, record.Lat, record.Lng)
-				
-				// 3. Acceleration Profile Analysis (delta V / delta t)
 				accelerationRate := (record.Speed - prevState.LastSpeed) / timeDeltaSeconds
 
-				// 4. Trigger Advanced CEP Alerts
+				// Over-speed validation check
+				if record.Speed > 55.0 {
+					alertMsg := fmt.Sprintf("🚨 VEHICLE %s OVER SPEEDING! Speed: %.2f mph", record.VehicleID, record.Speed)
+					broadcast(WSMessage{Type: "alert", Payload: alertMsg})
+				}
+
 				if accelerationRate <= HardBrakingThreshold {
-					fmt.Printf("⚠️  ALERT [HARD BRAKING]: Vehicle %s slammed brakes! Accel: %.2f mph/s\n", 
-						record.VehicleID, accelerationRate)
+					alertMsg := fmt.Sprintf("⚠️ VEHICLE %s HARD BRAKING INCIDENT! Accel: %.2f mph/s", record.VehicleID, accelerationRate)
+					broadcast(WSMessage{Type: "alert", Payload: alertMsg})
 				}
 				
 				if record.Speed == 0 && timeDeltaSeconds >= IdleTimeoutDuration {
-					fmt.Printf("💤 ALERT [IDLE DETECTED]: Vehicle %s has been stationary for %.1f seconds.\n", 
-						record.VehicleID, timeDeltaSeconds)
+					alertMsg := fmt.Sprintf("💤 VEHICLE %s DETECTED IDLE FOR %.1f SECONDS", record.VehicleID, timeDeltaSeconds)
+					broadcast(WSMessage{Type: "alert", Payload: alertMsg})
 				}
-
-				// Output live calculated telemetry metrics status logs
-				fmt.Printf("📊 Fleet Tracking [%s] -> Distance: %.4f mi | Delta T: %.1fs | Accel: %.2f mph/s\n", 
-					record.VehicleID, distanceMiles, timeDeltaSeconds, accelerationRate)
 			}
 		}
 
-		// Save current metrics state vector back into our core cache memory maps
 		stateStore[record.VehicleID] = VehicleState{
 			LastLat:       record.Lat,
 			LastLng:       record.Lng,

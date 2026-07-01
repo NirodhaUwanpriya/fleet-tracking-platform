@@ -22,7 +22,7 @@ def generate_initial_fleet(num_vehicles):
             "vehicle_id": str(uuid.uuid4())[:8],
             "lat": base_lat + random.uniform(-0.05, 0.05),
             "lng": base_lng + random.uniform(-0.05, 0.05),
-            "speed": random.uniform(20.0, 60.0),
+            "speed": random.uniform(20.0, 50.0),
             "heading": random.randint(0, 359)
         })
     return fleet

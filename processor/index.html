@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fleet Operations Command Center</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 20px; margin-bottom: 20px; }
+        h1 { margin: 0; color: #38bdf8; font-size: 24px; }
+        .status { padding: 6px 12px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; font-size: 14px; }
+        .status.connected { color: #4ade80; border-color: #22c55e; }
+        .grid { display: grid; grid-template-columns: 2.5fr 1fr; gap: 20px; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+        h2 { margin-top: 0; font-size: 18px; color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+        
+        /* Map Canvas Dimensions */
+        #map { height: 500px; border-radius: 6px; background: #0f172a; border: 1px solid #334155; }
+        
+        .alert-log { height: 500px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .alert-item { padding: 12px; border-radius: 6px; border-left: 4px solid; background: #0f172a; animation: fadeIn 0.3s ease; font-size: 13px; }
+        .alert-speed { border-left-color: #ef4444; color: #fca5a5; }
+        .alert-brake { border-left-color: #f59e0b; color: #fde047; }
+        .alert-idle { border-left-color: #3b82f6; color: #93c5fd; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📡 Live Fleet Operations Command Center</h1>
+            <div id="ws-status" class="status">Connecting to stream...</div>
+        </header>
+        <div class="grid">
+            <div class="card">
+                <h2>Real-Time Geospatial Map</h2>
+                <div id="map"></div>
+            </div>
+            <div class="card">
+                <h2>Incident & Exception Feed</h2>
+                <div id="alert-container" class="alert-log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const alertContainer = document.getElementById('alert-container');
+        const statusDiv = document.getElementById('ws-status');
+        
+        // 1. Initialize the Leaflet map centered over Chicago (where the simulator creates pins)
+        const map = L.map('map').setView([41.8781, -87.6298], 12);
+
+        // 2. Load dark-mode theme map tiles from CartoDB
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        // Map storage container tracking map marker objects by vehicle_id
+        const vehicleMarkers = {};
+
+        // 3. Establish WebSocket connection channel
+        const socket = new WebSocket('ws://localhost:8080/stream');
+
+        socket.onopen = () => {
+            statusDiv.textContent = "CONNECTED (LIVE MAP STREAMING)";
+            statusDiv.className = "status connected";
+        };
+
+        socket.onclose = () => {
+            statusDiv.textContent = "DISCONNECTED";
+            statusDiv.className = "status";
+        };
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'telemetry') {
+                updateVehicleMapMarker(data.payload);
+            } else if (data.type === 'alert') {
+                pushAlertLog(data.payload);
+            }
+        };
+
+        function updateVehicleMapMarker(v) {
+            const pos = [v.lat, v.lng];
+            const popupContent = `
+                <div style="color: #0f172a; font-family: sans-serif;">
+                    <strong>Vehicle ID:</strong> <span style="font-family: monospace;">${v.vehicle_id}</span><br>
+                    <strong>Speed:</strong> ${v.speed.toFixed(2)} mph<br>
+                    <strong>Heading:</strong> ${v.heading}°
+                </div>
+            `;
+
+            if (vehicleMarkers[v.vehicle_id]) {
+                // If the truck pin already exists, slide its location smoothly to new coordinates
+                vehicleMarkers[v.vehicle_id].setLatLng(pos);
+                vehicleMarkers[v.vehicle_id].getPopup().setContent(popupContent);
+            } else {
+                // Otherwise, initialize a fresh marker pin onto the canvas
+                const marker = L.marker(pos).addTo(map);
+                marker.bindPopup(popupContent);
+                vehicleMarkers[v.vehicle_id] = marker;
+            }
+        }
+
+        function pushAlertLog(alert) {
+            const item = document.createElement('div');
+            let alertClass = 'alert-speed';
+            if (alert.includes('BRAKING')) alertClass = 'alert-brake';
+            if (alert.includes('IDLE')) alertClass = 'alert-idle';
+
+            item.className = `alert-item ${alertClass}`;
+            item.innerHTML = `<strong>[${new Date().toLocaleTimeString()}]</strong> ${alert}`;
+            
+            alertContainer.insertBefore(item, alertContainer.firstChild);
+            if (alertContainer.children.length > 30) {
+                alertContainer.removeChild(alertContainer.lastChild);
+            }
+        }
+    </script>
+</body>
+</html>
