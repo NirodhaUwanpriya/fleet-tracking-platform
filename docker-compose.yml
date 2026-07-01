@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   kafka:
     image: confluentinc/cp-kafka:7.6.0
@@ -19,3 +21,18 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
       KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: fleet_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: fleet_admin
+      POSTGRES_PASSWORD: fleet_password
+      POSTGRES_DB: fleet_telemetry
+    volumes:
+      - postgres_data_v2:/var/lib/postgresql/data
+
+volumes:
+  postgres_data_v2:
