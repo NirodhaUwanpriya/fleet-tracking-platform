@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+option go_package = "fleet-gateway/proto";
+
+package telemetry;
+
+service FleetIngress {
+  rpc SendPosition (PositionUpdate) returns (IngressResponse);
+}
+
+message PositionUpdate {
+  string vehicle_id = 1;
+  double lat = 2;
+  double lng = 3;
+  double speed = 4;
+  int32 heading = 5;
+  string timestamp = 6;
+}
+
+message IngressResponse {
+  bool success = 1;
+  string message = 2;
+}
